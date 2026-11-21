@@ -1,0 +1,12 @@
+[
+  {
+    "runbook_id": "RB-04",
+    "service": "payments-api",
+    "title": "Payments DB Pool Exhaustion Recovery",
+    "steps": [
+      "1. Check recent changes to db_pool.yaml and revert if max_connections was reduced.",
+      "2. Run graceful connection pool recycle on payments-api pods.",
+      "3. Verify active DB connections drop below 70% in Cloud Monitoring."
+    ]
+  }
+]

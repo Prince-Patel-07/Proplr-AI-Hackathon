@@ -1,0 +1,16 @@
+[
+  {
+    "deployment_id": "DEP-412",
+    "service": "payments-api",
+    "timestamp": "2026-11-21T02:38:00Z",
+    "author": "j.patel",
+    "summary": "Updated db_pool.yaml connection timeout and max_connections"
+  },
+  {
+    "deployment_id": "DEP-884",
+    "service": "checkout-service",
+    "timestamp": "2026-11-21T08:10:00Z",
+    "author": "m.chen",
+    "summary": "Release v2.14.0: Updated regional tax calculation logic"
+  }
+]
