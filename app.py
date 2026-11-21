@@ -8,6 +8,8 @@ records. The AI only writes the likely cause, its confidence and the evidence.
 If the AI fails, a plain brief is built from the same records.
 """
 
+import json
+import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -22,8 +24,9 @@ load_dotenv(ROOT / ".env")
 import orchestrator  # noqa: E402
 from skill_runner import run_skill  # noqa: E402
 
-RECENT_WINDOW = timedelta(hours=24)
+LIKELY_CAUSE_WINDOW = timedelta(hours=2)
 REQUIRED_AI_KEYS = ("probable_root_cause", "confidence", "evidence")
+ID_PATTERN = re.compile(r"\b(?:INC|DEP|CHG|RB|ALT)-\d+\b")
 
 
 def parse_time(value):
@@ -35,12 +38,12 @@ def format_time(value):
 
 
 def latest_change_before_alert(alert, changes):
-    """The newest change in the 24 hours before the alert, if any."""
+    """The newest change close enough to the alert to suspect it, if any."""
     alert_time = parse_time(alert["timestamp"])
     candidates = [
         change
         for change in changes
-        if timedelta(0) <= alert_time - parse_time(change["timestamp"]) <= RECENT_WINDOW
+        if timedelta(0) <= alert_time - parse_time(change["timestamp"]) <= LIKELY_CAUSE_WINDOW
     ]
     return max(candidates, key=lambda c: parse_time(c["timestamp"]), default=None)
 
@@ -75,7 +78,7 @@ def build_fallback_brief(evidence):
         cause = f"Possibly caused by a recent release. {suspect_text}"
         confidence = "Medium"
     else:
-        cause = "Unknown. No past incident or recent change explains this alert."
+        cause = "Unknown. No past incident matches this alert. Check the recent changes below."
         confidence = "Low"
 
     return {
@@ -91,13 +94,23 @@ def build_fallback_brief(evidence):
     }
 
 
+def invented_ids(brief, evidence):
+    """IDs the AI cited that do not appear in the evidence it was given."""
+    return set(ID_PATTERN.findall(json.dumps(brief))) - set(
+        ID_PATTERN.findall(json.dumps(evidence))
+    )
+
+
 def run_skill_safely(skill_name, payload):
     """Calls the AI without the scenario label, and falls back if it fails."""
     alert = {k: v for k, v in payload["alert"].items() if k != "scenario_label"}
+    clean_payload = {**payload, "alert": alert}
     try:
-        brief = run_skill(skill_name, {**payload, "alert": alert})
+        brief = run_skill(skill_name, clean_payload)
         if not all(brief.get(key) for key in REQUIRED_AI_KEYS):
             raise ValueError("AI reply is missing required fields")
+        if invented_ids(brief, clean_payload):
+            raise ValueError("AI reply cited an ID that is not in the evidence")
     except Exception as error:
         # Only the error type is logged, so a key can never reach the console.
         print(f"AI brief failed for {alert['alert_id']}: {type(error).__name__}")
@@ -149,7 +162,8 @@ def show_past_incidents(incidents):
         st.write("No matching past incidents.")
     for incident in incidents:
         st.markdown(
-            f"- **{incident['incident_id']}** ({incident['date']}): {incident['symptom']}\n"
+            f"- **{incident['incident_id']}** ({incident['date']}, "
+            f"{incident['score']:.0%} match): {incident['symptom']}\n"
             f"  - Cause: {incident['root_cause']}\n"
             f"  - Resolution: {incident['resolution']}"
         )

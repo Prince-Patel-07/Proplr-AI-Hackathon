@@ -1,12 +1,8 @@
 [
-  {
-    "runbook_id": "RB-04",
-    "service": "payments-api",
-    "title": "Payments DB Pool Exhaustion Recovery",
-    "steps": [
-      "1. Check recent changes to db_pool.yaml and revert if max_connections was reduced.",
-      "2. Run graceful connection pool recycle on payments-api pods.",
-      "3. Verify active DB connections drop below 70% in Cloud Monitoring."
-    ]
-  }
+  {"runbook_id": "RB-04", "service": "payments-api", "title": "Payments DB Pool Exhaustion Recovery", "steps": ["1. Check recent changes to db_pool.yaml and revert if max_connections was reduced.", "2. Run graceful connection pool recycle on payments-api pods.", "3. Verify active DB connections drop below 70% in Cloud Monitoring."]},
+  {"runbook_id": "RB-07", "service": "checkout-service", "title": "Cart Cache Stampede Recovery", "steps": ["1. Compare the current cache TTL with the last known good value.", "2. Restore the TTL if it changed.", "3. Warm the cart cache and verify page latency is below 1 second."]},
+  {"runbook_id": "RB-09", "service": "auth-service", "title": "SAML Certificate Renewal", "steps": ["1. Confirm the certificate expiry date.", "2. Install the renewed certificate.", "3. Restart auth pods one at a time and test a single sign-on login."]},
+  {"runbook_id": "RB-11", "service": "search-api", "title": "Search Node Disk Recovery", "steps": ["1. Identify the node with high disk usage.", "2. Remove indices past the retention period.", "3. Verify cluster health returns to green."]},
+  {"runbook_id": "RB-13", "service": "inventory-service", "title": "Partner API Credential Rotation", "steps": ["1. Confirm the authorization failure in the sync logs.", "2. Rotate the partner credentials in the secret manager.", "3. Rerun the stock sync and verify the record counts."]},
+  {"runbook_id": "RB-15", "service": "api-gateway", "title": "TLS Certificate Chain Repair", "steps": ["1. Inspect the served certificate chain.", "2. Deploy the complete chain including intermediates.", "3. Verify handshakes from an external client."]}
 ]
