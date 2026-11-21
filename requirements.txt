@@ -1,1 +1,6 @@
 streamlit==1.67.0
+fastapi
+uvicorn
+httpx
+pydantic
+python-dotenv
