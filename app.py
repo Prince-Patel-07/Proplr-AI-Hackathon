@@ -2,117 +2,145 @@
 
 Left: incoming alerts. Right: the brief for the selected alert.
 The engineer on call approves or rejects it. Nothing is executed or sent.
+
+Trust rule: past incidents, changes and runbooks are shown straight from the
+records. The AI only writes the likely cause, its confidence and the evidence.
+If the AI fails, a plain brief is built from the same records.
 """
 
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+
 import streamlit as st
+from dotenv import load_dotenv
 
-# Sample alerts. At connect time, load these from data/alerts.json instead.
-ALERTS = [
-    {
-        "id": "ALR-001",
-        "service": "payments-api",
-        "message": "Requests timing out, DB connections maxed",
-        "time": "2026-11-21T09:40",
-    },
-    {
-        "id": "ALR-002",
-        "service": "checkout-service",
-        "message": "5xx errors at 8%",
-        "time": "2026-11-21T10:30",
-    },
-    {
-        "id": "ALR-003",
-        "service": "notification-service",
-        "message": "Email queue backlog, SMTP failures",
-        "time": "2026-11-21T11:05",
-    },
-]
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT / "backend"))
+load_dotenv(ROOT / ".env")
 
-# Hard-coded briefs, one per demo scenario. get_brief() below replaces these.
-# Teammates: make_brief() should return this same shape.
-FAKE_BRIEFS = {
-    "ALR-001": {
-        "likely_cause": "DB connection pool exhausted on payments-api. "
-        "This matches a past incident with the same symptoms (INC-0087).",
-        "confidence": "High",
-        "past_incidents": [
-            {
-                "id": "INC-0087",
-                "title": "payments-api DB connection pool exhausted",
-                "score": 0.82,
-            },
+import orchestrator  # noqa: E402
+from skill_runner import run_skill  # noqa: E402
+
+RECENT_WINDOW = timedelta(hours=24)
+REQUIRED_AI_KEYS = ("probable_root_cause", "confidence", "evidence")
+
+
+def parse_time(value):
+    return datetime.fromisoformat(value)
+
+
+def format_time(value):
+    return parse_time(value).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def latest_change_before_alert(alert, changes):
+    """The newest change in the 24 hours before the alert, if any."""
+    alert_time = parse_time(alert["timestamp"])
+    candidates = [
+        change
+        for change in changes
+        if timedelta(0) <= alert_time - parse_time(change["timestamp"]) <= RECENT_WINDOW
+    ]
+    return max(candidates, key=lambda c: parse_time(c["timestamp"]), default=None)
+
+
+def minutes_before(alert, change):
+    gap = parse_time(alert["timestamp"]) - parse_time(change["timestamp"])
+    return int(gap.total_seconds() // 60)
+
+
+def build_fallback_brief(evidence):
+    """A brief built only from the records, used when the AI is unavailable."""
+    alert = evidence["alert"]
+    history = evidence["history_matches"]
+    runbooks = evidence["runbooks"]
+    suspect = latest_change_before_alert(alert, evidence["recent_changes"])
+    facts = [f"Log: {log['message']}" for log in evidence["log_anomalies"]]
+
+    if suspect:
+        suspect_text = (
+            f"{suspect['deployment_id']} ({suspect['summary']}) was deployed "
+            f"{minutes_before(alert, suspect)} minutes before this alert."
+        )
+        facts.append(suspect_text)
+
+    if history and runbooks:
+        match = history[0]
+        cause = f"Possible repeat of {match['incident_id']}: {match['root_cause']}."
+        if suspect:
+            cause += f" Check {suspect['deployment_id']} first."
+        confidence = "Medium"
+    elif suspect:
+        cause = f"Possibly caused by a recent release. {suspect_text}"
+        confidence = "Medium"
+    else:
+        cause = "Unknown. No past incident or recent change explains this alert."
+        confidence = "Low"
+
+    return {
+        "probable_root_cause": cause,
+        "confidence": confidence,
+        "evidence": facts,
+        "next_steps_if_unknown": [
+            "Read the latest error logs for this service.",
+            "Check for configuration or infrastructure changes outside the deploy history.",
+            "Check the status pages of outside providers this service depends on.",
         ],
-        "recent_changes": [],
-        "known_fix": {
-            "runbook_id": "RB-012",
-            "title": "Recover from DB connection pool exhaustion",
-            "steps": [
-                "Confirm active connections are at the pool limit.",
-                "Find and end long-running queries.",
-                "Restart payments-api pods one at a time.",
-                "Watch timeouts return to normal.",
-            ],
-        },
-    },
-    "ALR-002": {
-        "likely_cause": "Deploy DEP-0412 to checkout-service at 10:15, "
-        "15 minutes before the errors started.",
-        "confidence": "High",
-        "past_incidents": [],
-        "recent_changes": [
-            {
-                "id": "DEP-0412",
-                "service": "checkout-service",
-                "time": "2026-11-21T10:15",
-                "summary": "Code deploy",
-            },
-        ],
-        "known_fix": None,
-    },
-    "ALR-003": {
-        "likely_cause": "Unknown. No past incident matches this alert.",
-        "confidence": "Low",
-        "past_incidents": [],
-        "recent_changes": [
-            {
-                "id": "CHG-SAMPLE",
-                "service": "notification-service",
-                "time": "2026-11-20T16:00",
-                "summary": "Placeholder change to check",
-            },
-        ],
-        "known_fix": None,
-    },
-}
+        "source": "fallback",
+    }
 
 
-def get_brief(alert):
-    """The one place to connect the real pipeline at 19:30.
+def run_skill_safely(skill_name, payload):
+    """Calls the AI without the scenario label, and falls back if it fails."""
+    alert = {k: v for k, v in payload["alert"].items() if k != "scenario_label"}
+    try:
+        brief = run_skill(skill_name, {**payload, "alert": alert})
+        if not all(brief.get(key) for key in REQUIRED_AI_KEYS):
+            raise ValueError("AI reply is missing required fields")
+    except Exception as error:
+        # Only the error type is logged, so a key can never reach the console.
+        print(f"AI brief failed for {alert['alert_id']}: {type(error).__name__}")
+        return build_fallback_brief(payload)
+    return {**brief, "source": "ai"}
 
-    Replace the body with:
-        evidence = {
-            "past_incidents": tools.search_past_incidents(alert["message"]),
-            "recent_changes": tools.get_recent_changes(alert["service"], alert["time"]),
-        }
-        return agents.make_brief(alert, evidence)
-    """
-    return FAKE_BRIEFS[alert["id"]]
+
+orchestrator.run_skill = run_skill_safely
 
 
-def show_alert_list():
+def get_investigation(alert_id):
+    """Runs once per alert, because Streamlit reruns this file on every click."""
+    investigations = st.session_state.investigations
+    if alert_id not in investigations:
+        with st.spinner("Gathering evidence and writing the brief..."):
+            investigations[alert_id] = orchestrator.investigate_alert(alert_id)
+    return investigations[alert_id]
+
+
+def show_alert_list(alerts):
     st.subheader("Alerts")
-    for alert in ALERTS:
-        decision = st.session_state.decisions.get(alert["id"])
+    for alert in alerts:
+        alert_id = alert["alert_id"]
+        decision = st.session_state.decisions.get(alert_id)
         mark = {"Approved": " ✅", "Rejected": " ❌"}.get(decision, "")
-        selected = alert["id"] == st.session_state.selected
+        selected = alert_id == st.session_state.selected
         if st.button(
-            f"**{alert['id']}{mark}** · {alert['service']}\n\n{alert['message']}",
-            key=f"alert_{alert['id']}",
+            f"**{alert_id}{mark}** · {alert['service']}\n\n{alert['message']}",
+            key=f"alert_{alert_id}",
             type="primary" if selected else "secondary",
             width="stretch",
         ):
-            st.session_state.selected = alert["id"]
+            st.session_state.selected = alert_id
             st.rerun()
+
+
+def show_likely_cause(brief):
+    st.markdown("#### Likely cause")
+    st.warning(f"{brief['probable_root_cause']}\n\nConfidence: {brief['confidence']}")
+    if brief["evidence"]:
+        st.markdown("**Why**")
+        for fact in brief["evidence"]:
+            st.markdown(f"- {fact}")
 
 
 def show_past_incidents(incidents):
@@ -121,31 +149,39 @@ def show_past_incidents(incidents):
         st.write("No matching past incidents.")
     for incident in incidents:
         st.markdown(
-            f"- **{incident['id']}**: {incident['title']} "
-            f"(match {incident['score']:.2f})"
+            f"- **{incident['incident_id']}** ({incident['date']}): {incident['symptom']}\n"
+            f"  - Cause: {incident['root_cause']}\n"
+            f"  - Resolution: {incident['resolution']}"
         )
 
 
-def show_recent_changes(changes):
+def show_recent_changes(alert, changes):
     st.markdown("#### Recent changes")
     if not changes:
-        st.write("No recent changes to this service.")
+        st.write("No recent changes on record for this service.")
     for change in changes:
-        when = change["time"].replace("T", " ")
+        gap = minutes_before(alert, change)
+        timing = f"{gap} min before alert" if gap >= 0 else "after the alert"
         st.markdown(
-            f"- **{change['id']}**: {change['summary']} to "
-            f"{change['service']} at {when}"
+            f"- **{change['deployment_id']}**: {change['summary']} "
+            f"({change['author']}, {format_time(change['timestamp'])}, {timing})"
         )
 
 
-def show_known_fix(fix):
+def show_known_fix(runbooks, brief):
     st.markdown("#### Known fix")
-    if not fix:
+    if not runbooks:
         st.error("No known fix found.")
+        steps = brief.get("next_steps_if_unknown") or []
+        if steps:
+            st.markdown("**What to check next**")
+            for step in steps:
+                st.markdown(f"- {step}")
         return
-    st.markdown(f"**{fix['runbook_id']}**: {fix['title']}")
-    for number, step in enumerate(fix["steps"], start=1):
-        st.markdown(f"{number}. {step}")
+    for runbook in runbooks:
+        st.markdown(f"**{runbook['runbook_id']}**: {runbook['title']}")
+        for step in runbook["steps"]:
+            st.markdown(step)
 
 
 def show_decision(alert_id):
@@ -168,36 +204,44 @@ def show_decision(alert_id):
         st.rerun()
 
 
-def show_brief(alert):
-    brief = get_brief(alert)
-    st.subheader(f"Brief for {alert['id']}")
+def show_brief(alert_id):
+    result = get_investigation(alert_id)
+    alert, findings, brief = result["alert"], result["agent_findings"], result["brief"]
+
+    st.subheader(f"Brief for {alert_id}")
     st.caption(
-        f"{alert['service']} · {alert['message']} · {alert['time'].replace('T', ' ')}"
+        f"{alert['service']} · {alert['severity']} · {alert['message']} · "
+        f"{format_time(alert['timestamp'])}"
     )
 
-    st.markdown("#### Likely cause")
-    st.warning(f"{brief['likely_cause']}\n\nConfidence: {brief['confidence']}")
+    if brief["source"] == "fallback":
+        st.info("AI unavailable. This brief was built directly from the records.")
+        if st.button("Try AI again", key=f"retry_{alert_id}"):
+            del st.session_state.investigations[alert_id]
+            st.rerun()
 
-    show_past_incidents(brief["past_incidents"])
-    show_recent_changes(brief["recent_changes"])
-    show_known_fix(brief["known_fix"])
-    show_decision(alert["id"])
+    show_likely_cause(brief)
+    show_past_incidents(findings["history_matches"])
+    show_recent_changes(alert, findings["recent_changes"])
+    show_known_fix(findings["runbooks"], brief)
+    show_decision(alert_id)
 
 
 def main():
     st.set_page_config(page_title="Incident Brief", page_icon="🚨", layout="wide")
-    st.session_state.setdefault("selected", ALERTS[0]["id"])
+    alerts = orchestrator.load_json("alerts.json")
+    st.session_state.setdefault("selected", alerts[0]["alert_id"])
     st.session_state.setdefault("decisions", {})
+    st.session_state.setdefault("investigations", {})
 
     st.title("Incident Brief")
     st.caption("Sample data only. The engineer on call checks the brief and decides.")
 
     left, right = st.columns([1, 2], gap="large")
     with left:
-        show_alert_list()
+        show_alert_list(alerts)
     with right:
-        alert = next(a for a in ALERTS if a["id"] == st.session_state.selected)
-        show_brief(alert)
+        show_brief(st.session_state.selected)
 
 
 if __name__ == "__main__":
