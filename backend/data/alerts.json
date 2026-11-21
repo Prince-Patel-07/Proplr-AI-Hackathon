@@ -1,0 +1,26 @@
+[
+  {
+    "alert_id": "ALT-101",
+    "scenario_label": "Scenario 1: Repeat Incident",
+    "service": "payments-api",
+    "severity": "critical",
+    "message": "Database connection pool exhausted",
+    "timestamp": "2026-11-21T02:43:00Z"
+  },
+  {
+    "alert_id": "ALT-102",
+    "scenario_label": "Scenario 2: Recent Deployment",
+    "service": "checkout-service",
+    "severity": "critical",
+    "message": "HTTP 500 error rate spiked above 18%",
+    "timestamp": "2026-11-21T08:16:00Z"
+  },
+  {
+    "alert_id": "ALT-103",
+    "scenario_label": "Scenario 3: Unknown Incident",
+    "service": "analytics-worker",
+    "severity": "high",
+    "message": "Queue consumer stalled: Redis OOM command not allowed",
+    "timestamp": "2026-11-21T11:05:00Z"
+  }
+]

@@ -1,0 +1,10 @@
+[
+  {
+    "incident_id": "INC-089",
+    "service": "payments-api",
+    "date": "2026-11-09",
+    "symptom": "Database connection pool exhausted during peak traffic",
+    "root_cause": "max_connections in db_pool.yaml was lowered below active worker count",
+    "resolution": "Reverted db_pool.yaml and recycled idle database connections"
+  }
+]

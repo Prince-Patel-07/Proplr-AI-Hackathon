@@ -1,0 +1,20 @@
+[
+  {
+    "service": "payments-api",
+    "timestamp": "2026-11-21T02:41:00Z",
+    "level": "ERROR",
+    "message": "TimeoutError: Unable to acquire connection from pool within 5000ms (100/100 active)"
+  },
+  {
+    "service": "checkout-service",
+    "timestamp": "2026-11-21T08:12:00Z",
+    "level": "ERROR",
+    "message": "NullPointerException in TaxCalculator.calculateProvincialTax() at line 84"
+  },
+  {
+    "service": "analytics-worker",
+    "timestamp": "2026-11-21T11:03:00Z",
+    "level": "ERROR",
+    "message": "RedisCommandExecutionException: OOM command not allowed when used memory > 'maxmemory'"
+  }
+]
